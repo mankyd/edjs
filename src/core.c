@@ -247,9 +247,11 @@ static JSBool edjs_Import(JSContext *cx, JSObject *obj, uintN argc, jsval *argv,
 
         module_node->value = (void *)module_data;
         module_data->file_path = full_path;
+        module_data->dl_lib = NULL;
 
         if (0 == strcmp (strrchr (full_path, '.' ) + 1, "ed" )) { //text file
             module_data->type = EDJS_TEXT;
+
             temp_file = fopen (full_path, "rb" );
             if (NULL == temp_file) {
                 EDJS_ERR(cx, EDJSERR_OPENING_MODULE, JS_GetStringBytes(file_str));
@@ -259,48 +261,34 @@ static JSBool edjs_Import(JSContext *cx, JSObject *obj, uintN argc, jsval *argv,
             fseek (temp_file, 0, SEEK_END);
             file_size = ftell (temp_file);
             rewind (temp_file);
-            buffer = (char*)EDJS_malloc (cx, sizeof(char)*file_size);
+            buffer = (char*)EDJS_malloc (cx, sizeof(char)*(file_size+26)); //__imp__=new function(){};\0
             if (NULL == buffer) {
                 goto error;
             }
-
-            bytes_read = fread (buffer, 1, file_size, temp_file);
+            strcpy(buffer, "__imp__=new function(){");
+            bytes_read = fread (buffer+23, 1, file_size, temp_file);
             if (bytes_read != file_size) {
                 EDJS_ERR(cx, EDJSERR_READING_MODULE, JS_GetStringBytes(file_str));
                 goto error;
             }
             fclose (temp_file);
             temp_file = NULL;
-
-            func = JS_CompileFunction(cx, NULL, NULL, 0, NULL, 
-                                      buffer, file_size,
-                                      full_path, 0);
-            if (NULL == func) {
-                EDJS_ERR(cx, EDJSERR_COMPILING_MODULE, JS_GetStringBytes(file_str));
+            buffer[file_size+23] = '}';
+            buffer[file_size+24] = '\0';
+            if (JS_FALSE == JS_EvaluateScript(cx, obj, 
+                                              buffer, file_size+24, full_path,
+                                              0, &(argv[argc+1]))) {
+                EDJS_ERR(cx, EDJSERR_INITING_MODULE, JS_GetStringBytes(file_str));
                 goto error;
             }
 
+            constructed_obj = JSVAL_TO_OBJECT(argv[argc+1]);
+            if (JS_FALSE == JS_DeleteProperty(cx, obj, "__imp__")) {
+                //report error
+                goto error;
+            }
             EDJS_free(cx, buffer);
             buffer = NULL;
-
-            if (JS_FALSE == JS_GetProperty(cx, JS_GetFunctionObject(func), "prototype", rval)) {
-                EDJS_ERR(cx, EDJSERR_GET_PROPERTY, JS_GetStringBytes(file_str), "prototype");
-                goto error;
-            }
-
-            constructed_obj = JS_ConstructObject(cx, JS_GET_CLASS(cx, JS_GetFunctionObject(func)), JSVAL_TO_OBJECT(*rval), NULL);
-            if (NULL == constructed_obj) {
-                EDJS_ERR(cx, EDJSERR_INITING_MODULE, JS_GetStringBytes(file_str));
-                goto error;
-            }
-            argv[argc+1] = OBJECT_TO_JSVAL(constructed_obj);
-
-            if (JS_FALSE == JS_CallFunction(cx, constructed_obj, func, 0, NULL, rval)) {
-                EDJS_ERR(cx, EDJSERR_INITING_MODULE, JS_GetStringBytes(file_str));
-                goto error;
-            }
-
-            module_data->dl_lib = NULL;
         }
         else { //binary file
             module_data->type = EDJS_BINARY;
