@@ -79,22 +79,25 @@ static JSBool edjs_mcd_SetException(JSContext *cx, edjs_mcd_private *p, memcache
 static JSBool edjs_mcd_Get(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval) {
     JSBool ok = JS_TRUE;
     edjs_mcd_private *p = NULL;
+    //uintN i = 0;
     JSString *key_str = NULL;
     JSString *val_str = NULL;
+    //char **keys = NULL;
+    //size_t *key_lens = NULL;
     char *val = NULL;
-    memcached_return error;
-    uint32_t flags = 0;
     size_t val_len = 0;
-
-
-    JS_BeginRequest(cx);
+    uint32_t flags = 0;
+    memcached_return result;
+    //char ret_key[MEMCACHED_MAX_KEY+1];
+    //size_t ret_key_len = 0;
+    //JSObject *ret_obj = NULL;
 
     if (argc < 1) {
         //report error
         goto error;
     }
 
-    p = (edjs_mcd_private *)JS_GetPrivate(cx, obj);
+    p = (edjs_mcd_private *)JS_GetInstancePrivate(cx, obj, &edjs_mcd_class, NULL);
 
     if (NULL == p->servers) {
         //report error
@@ -106,16 +109,14 @@ static JSBool edjs_mcd_Get(JSContext *cx, JSObject *obj, uintN argc, jsval *argv
         //report error
         goto error;
     }
-    argv[0] = STRING_TO_JSVAL(key_str);
-
-
+    argv[0] = STRING_TO_JSVAL(key_str); //root key_str
     val = memcached_get (p->servers,
                          JS_GetStringBytes(key_str), JS_GetStringLength(key_str), 
-                         &val_len, &flags, &error);
+                         &val_len, &flags, &result);
 
-    if (MEMCACHED_SUCCESS != error) {
-        if (MEMCACHED_NOTFOUND != error) {
-            EDJS_MCD_ERR(cx, p, error);
+    if (MEMCACHED_SUCCESS != result) {
+        if (MEMCACHED_NOTFOUND != result) {
+            EDJS_MCD_ERR(cx, p, result);
             goto error;
         }
         else
@@ -127,20 +128,156 @@ static JSBool edjs_mcd_Get(JSContext *cx, JSObject *obj, uintN argc, jsval *argv
             //report error
             goto error;
         }
-        
         *rval = STRING_TO_JSVAL(val_str);
     }
 
     goto finish;
- error:
+error:
     ok = JS_FALSE;
 
     *rval = JSVAL_VOID;
 
  finish:
-    JS_EndRequest(cx);
     if (NULL != val)
         free(val);
+
+    return ok;
+}
+
+static JSBool edjs_mcd_MultiGet(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval) {
+    //expects 1 argument
+    //has 1 extra root
+    JSBool ok = JS_TRUE;
+    edjs_mcd_private *p = NULL;
+    JSObject *array_obj = NULL;
+    jsuint a_len = 0;
+    jsuint i = 0;
+
+    JSString *key_str = NULL;
+    JSString *val_str = NULL;
+    char **keys = NULL;
+    size_t *key_lens = NULL;
+    char *val = NULL;
+    size_t val_len = 0;
+    uint32_t flags = 0;
+    memcached_return result;
+    char ret_key[MEMCACHED_MAX_KEY+1];
+    size_t ret_key_len = 0;
+    JSObject *ret_obj = NULL;
+
+    if (argc < 1) {
+        //report error
+        goto error;
+    }
+
+    p = (edjs_mcd_private *)JS_GetInstancePrivate(cx, obj, &edjs_mcd_class, NULL);
+
+    if (NULL == p->servers) {
+        //report error
+        goto error;
+    }
+
+    if (JS_FALSE == JSVAL_IS_OBJECT(argv[0]) || JS_TRUE == JSVAL_IS_NULL(argv[0]) ||
+        JS_FALSE == JS_IsArrayObject(cx, JSVAL_TO_OBJECT(argv[0]))) {
+        //report error
+        goto error;
+    }
+
+    array_obj = JSVAL_TO_OBJECT(argv[0]);
+
+    if (JS_FALSE == JS_GetArrayLength(cx, array_obj, &a_len)) {
+        //report error
+        goto error;
+    }
+
+    keys = (char **)EDJS_malloc(cx, a_len * sizeof(char *));
+    if (NULL == keys) {
+        goto error;
+    }
+    for (i = 0; i < a_len; i++)
+        keys[i] = NULL;
+
+    key_lens = (size_t *)EDJS_malloc(cx, a_len * sizeof(size_t));
+    if (NULL == key_lens) {
+        goto error;
+    }
+    
+    for (i = 0; i < a_len; i++) {
+        if (JS_FALSE == JS_GetElement(cx, array_obj, i, &(argv[argc]))) {
+            //report error
+            goto error;
+        }
+
+        key_str = JS_ValueToString(cx, argv[argc]);
+        if (NULL == key_str) {
+            //report error
+            goto error;
+        }
+
+        argv[argc] = STRING_TO_JSVAL(key_str); //root key_str
+        key_lens[i] = JS_GetStringLength(key_str);
+        keys[i] = EDJS_malloc(cx, (key_lens[i]) * sizeof(char));
+        strncpy(keys[i], JS_GetStringBytes(key_str), key_lens[i]);
+    }
+
+    ret_obj = JS_NewObject(cx, NULL, NULL, NULL);
+    if (NULL == ret_obj) {
+        //report error
+        goto error;
+    }
+    *rval = OBJECT_TO_JSVAL(ret_obj); //root ret_obj
+
+    result = memcached_mget (p->servers, 
+                             keys, key_lens, 
+                             a_len);
+
+    if (MEMCACHED_SUCCESS != result) {
+        EDJS_MCD_ERR(cx, p, result);
+        goto error;
+    }
+
+    while (NULL != (val = memcached_fetch(p->servers,
+                                          ret_key, &ret_key_len, 
+                                          &val_len, &flags, &result
+                                          ))) {
+        val_str = JS_NewStringCopyN(cx, val, val_len);
+        if (NULL == val_str) {
+            //report error
+            goto error;
+        }
+
+        argv[0] = STRING_TO_JSVAL(val_str); //root value and prep it for the next step
+        ret_key[ret_key_len] = '\0';
+        if (JS_FALSE == JS_SetProperty(cx, ret_obj, ret_key, argv)) {
+            //report error
+            goto error;
+        }
+        free(val);        
+    }
+
+    if (MEMCACHED_END != result) {
+        EDJS_MCD_ERR(cx, p, result);
+        goto error;
+    }
+
+    goto finish;
+error:
+    ok = JS_FALSE;
+
+    *rval = JSVAL_VOID;
+
+ finish:
+    if (NULL != val)
+        free(val);
+
+    if (NULL != keys) {
+        for (i = 0; i < a_len; i++) {
+            if (NULL != keys[i])
+                EDJS_free(cx, keys[i]);
+        }
+
+        EDJS_free(cx, keys);
+    }
 
     return ok;
 }
@@ -188,7 +325,7 @@ static JSBool edjs_mcd_Set(JSContext *cx, JSObject *obj, uintN argc, jsval *argv
         goto error;
     }
 
-    p = (edjs_mcd_private *)JS_GetPrivate(cx, obj);
+    p = (edjs_mcd_private *)JS_GetInstancePrivate(cx, obj, &edjs_mcd_class, NULL);
 
     if (NULL == p->servers) {
         //report error
@@ -256,8 +393,7 @@ static JSBool edjs_mcd_Add(JSContext *cx, JSObject *obj, uintN argc, jsval *argv
         goto error;
     }
 
-    p = (edjs_mcd_private *)JS_GetPrivate(cx, obj);
-
+    p = (edjs_mcd_private *)JS_GetInstancePrivate(cx, obj, &edjs_mcd_class, NULL);
     if (NULL == p->servers) {
         //report error
         goto error;
@@ -324,8 +460,7 @@ static JSBool edjs_mcd_Replace(JSContext *cx, JSObject *obj, uintN argc, jsval *
         goto error;
     }
 
-    p = (edjs_mcd_private *)JS_GetPrivate(cx, obj);
-
+    p = (edjs_mcd_private *)JS_GetInstancePrivate(cx, obj, &edjs_mcd_class, NULL);
     if (NULL == p->servers) {
         //report error
         goto error;
@@ -390,8 +525,7 @@ static JSBool edjs_mcd_Delete(JSContext *cx, JSObject *obj, uintN argc, jsval *a
         goto error;
     }
 
-    p = (edjs_mcd_private *)JS_GetPrivate(cx, obj);
-
+    p = (edjs_mcd_private *)JS_GetInstancePrivate(cx, obj, &edjs_mcd_class, NULL);
     if (NULL == p->servers) {
         //report error
         goto error;
@@ -601,7 +735,7 @@ static JSBool edjs_mcd_AddServers(JSContext *cx, JSObject *obj, uintN argc, jsva
         server_buff = NULL;
     }
 
-    p = (edjs_mcd_private *)JS_GetPrivate(cx, obj);
+    p = (edjs_mcd_private *)JS_GetInstancePrivate(cx, obj, &edjs_mcd_class, NULL);
     if (NULL == p->servers) {
         //report error
         goto error;
@@ -640,7 +774,7 @@ static JSBool edjs_mcd_GetServers(JSContext *cx, JSObject *obj, uintN argc, jsva
     JSString *host_str = NULL;
     uint32_t i = 0;
     
-    p = (edjs_mcd_private *)JS_GetPrivate(cx, obj);
+    p = (edjs_mcd_private *)JS_GetInstancePrivate(cx, obj, &edjs_mcd_class, NULL);
     if (NULL == p->servers) {
         //report error
         goto error;
@@ -708,6 +842,7 @@ static JSBool edjs_mcd_Construct(JSContext *cx, JSObject *obj, uintN argc, jsval
 
     JSFunctionSpec my_methods[] = {
         JS_FS("get",        edjs_mcd_Get,        1, JSPROP_ENUMERATE, 0),
+        JS_FS("multiGet",   edjs_mcd_MultiGet,   1, JSPROP_ENUMERATE, 1),
         JS_FS("set",        edjs_mcd_Set,        2, JSPROP_ENUMERATE, 0),
         JS_FS("add",        edjs_mcd_Add,        2, JSPROP_ENUMERATE, 0),
         JS_FS("replace",    edjs_mcd_Replace,    2, JSPROP_ENUMERATE, 0),
@@ -789,8 +924,7 @@ static JSBool edjs_mcd_Construct(JSContext *cx, JSObject *obj, uintN argc, jsval
 static void edjs_mcd_Finalize(JSContext *cx, JSObject *obj) {
     edjs_mcd_private *p = NULL;
 
-    p = (edjs_mcd_private *)JS_GetPrivate(cx, obj);
-
+    p = (edjs_mcd_private *)JS_GetInstancePrivate(cx, obj, &edjs_mcd_class, NULL);
     if (NULL != p) {
         if (NULL != p->servers) {
             //memcached_server_list_free (srvr_st);
