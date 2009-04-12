@@ -261,7 +261,7 @@ static JSBool edjs_Import(JSContext *cx, JSObject *obj, uintN argc, jsval *argv,
             fseek (temp_file, 0, SEEK_END);
             file_size = ftell (temp_file);
             rewind (temp_file);
-            buffer = (char*)EDJS_malloc (cx, sizeof(char)*(file_size+26)); //__imp__=new function(){};\0
+            buffer = (char*)EDJS_malloc (cx, sizeof(char)*(file_size+26)); //__imp__=new function(){\n}\0
             if (NULL == buffer) {
                 goto error;
             }
@@ -273,10 +273,11 @@ static JSBool edjs_Import(JSContext *cx, JSObject *obj, uintN argc, jsval *argv,
             }
             fclose (temp_file);
             temp_file = NULL;
-            buffer[file_size+23] = '}';
-            buffer[file_size+24] = '\0';
+            buffer[file_size+23] = '\n';
+            buffer[file_size+24] = '}';
+            buffer[file_size+25] = '\0';
             if (JS_FALSE == JS_EvaluateScript(cx, obj, 
-                                              buffer, file_size+24, full_path,
+                                              buffer, file_size+25, full_path,
                                               0, &(argv[argc+1]))) {
                 EDJS_ERR(cx, EDJSERR_INITING_MODULE, JS_GetStringBytes(file_str));
                 goto error;
