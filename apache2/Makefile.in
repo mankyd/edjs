@@ -1,0 +1,89 @@
+ # ##### BEGIN LICENSE BLOCK #####
+ # Copyright 2009 Dave Mankoff (mankyd@gmail.com)
+ # License Version: GPL 3.0
+ #
+ # This file is part of EDJS 0.x
+ #
+ # EDJS is free software: you can redistribute it and/or modify
+ # it under the terms of the GNU General Public License as published by
+ # the Free Software Foundation, either version 3 of the License, or
+ # (at your option) any later version.
+ #
+ # EDJS is distributed in the hope that it will be useful,
+ # but WITHOUT ANY WARRANTY; without even the implied warranty of
+ # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ # GNU General Public License for more details.
+ #
+ # You should have received a copy of the GNU General Public License
+ # along with EDJS.  If not, see <http://www.gnu.org/licenses/>.
+ # ##### END LICENSE BLOCK #####
+
+
+@SET_MAKE@
+LIBEXECDIR=@LIBEXECDIR@
+INSTALL=@INSTALL@
+APXS=@APXS@
+
+INCLUDES=@MOD_INCLUDES@
+CFLAGS=@MOD_CFLAGS@
+LDLIBS=@MOD_LDLIBS@
+LDFLAGS=@MOD_LDFLAGS@
+srcdir=.
+
+MOD_SRCS=	mod_edjs.c session.c reqdata.c
+
+all: @ALL@
+
+mod_edjs: mod_edjs.so
+	@echo dso > .install
+
+mod_edjs.so: $(MOD_SRCS)
+	@echo 
+	@echo 'Compiling for DSO.'
+	@echo 
+	$(APXS) $(INCLUDES) $(CFLAGS) -c $(MOD_SRCS) $(LDFLAGS) $(LDLIBS)
+	@rm -f mod_edjs.so
+	@ln -s .libs/mod_edjs.so mod_edjs.so
+
+
+install: .install
+	@if test "`cat .install`" = "dso"; then \
+		$(MAKE) install-mod_edjs; \
+	else $(MAKE) install_static; fi
+
+install-mod_edjs:	mod_edjs
+	@echo
+	@echo "Performing DSO installation."
+	@echo
+	$(INSTALL) -d $(DESTDIR)$(LIBEXECDIR)
+	$(INSTALL) mod_edjs.so $(DESTDIR)$(LIBEXECDIR)
+	@echo
+	@echo "Now don't forget to edit your main config and add"
+	@echo "    LoadModule edjs_module $(LIBEXECDIR)/mod_edjs.so"
+	@echo "and if your configuration uses ClearModuleList, then also"
+	@echo "    AddModule mod_edjs.c"
+	@echo
+
+clean:
+	rm -rf mod_edjs.so *~ .libs *.o *.slo *.lo *.la 
+
+distclean: clean
+#	cd $(MAKE) distclean
+
+run:
+	sudo apache2ctl stop
+	sleep 1
+	sudo $(MAKE) install
+	sudo APACHE_RUN_USER=www-data APACHE_RUN_GROUP=www-data /usr/sbin/apache2 -X
+
+debug:
+	sudo apache2ctl stop
+	sleep 1
+	sudo $(MAKE) install
+	sudo APACHE_RUN_USER=www-data APACHE_RUN_GROUP=www-data gdb --args /usr/sbin/apache2 -X
+
+valgrind:
+	sudo apache2ctl stop
+	sleep 1
+	sudo $(MAKE) install
+	sudo APACHE_RUN_USER=www-data APACHE_RUN_GROUP=www-data valgrind /usr/sbin/apache2 -X

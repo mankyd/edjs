@@ -1,0 +1,95 @@
+ # ##### BEGIN LICENSE BLOCK #####
+ # Copyright 2009 Dave Mankoff (mankyd@gmail.com)
+ # License Version: GPL 3.0
+ #
+ # This file is part of EDJS 0.x
+ #
+ # EDJS is free software: you can redistribute it and/or modify
+ # it under the terms of the GNU General Public License as published by
+ # the Free Software Foundation, either version 3 of the License, or
+ # (at your option) any later version.
+ #
+ # EDJS is distributed in the hope that it will be useful,
+ # but WITHOUT ANY WARRANTY; without even the implied warranty of
+ # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ # GNU General Public License for more details.
+ #
+ # You should have received a copy of the GNU General Public License
+ # along with EDJS.  If not, see <http://www.gnu.org/licenses/>.
+ # ##### END LICENSE BLOCK #####
+
+
+
+@SET_MAKE@
+LIBEXECDIR=@LIBEXECDIR@
+INSTALL=@INSTALL@
+SM_MFLAGS=@SM_MFLAGS@
+SM_OBJDIR=@SM_OBJDIR@
+
+
+.PHONY: clean distclean spidermonkey
+
+default: all
+
+all: @ALL@
+	@echo
+	@echo 'Now su and make install'
+	@echo
+
+
+libedjs: spidermonkey
+	@cd src && $(MAKE)
+
+mod_edjs:
+	@cd apache2 && $(MAKE) mod_edjs
+
+mods: 
+	@cd modules && $(MAKE)
+
+spidermonkey: 
+	@cd spidermonkey && $(MAKE) $(SM_MFLAGS) OBJDIR=$(SM_OBJDIR) -f Makefile.ref
+
+install: install-libedjs install-mod_edjs
+
+install-libedjs: 
+	@cd src && $(MAKE) install
+
+install-mod_edjs:
+	@cd apache2 && $(MAKE) install
+
+install-headers: 
+	mkdir -p /usr/include/edjs/ -v
+	cp src/*.h /usr/include/edjs/ -v
+	cp src/*.msg /usr/include/edjs/ -v
+	cp spidermonkey/*.h /usr/include/edjs/ -v
+	cp spidermonkey/*.tbl /usr/include/edjs/ -v
+	cp spidermonkey/*.msg /usr/include/edjs/ -v
+	cp spidermonkey/edjs/*.h /usr/include/edjs/ -v
+
+clean:
+	cd src && $(MAKE) clean
+	cd apache2 && $(MAKE) clean
+	cd spidermonkey && $(MAKE) $(SM_MFLAGS) OBJDIR=$(SM_OBJDIR) -f Makefile.ref clean
+#	cd modules && $(MAKE) clean
+
+distclean:
+	rm -rf config.log config.status configure aclocal.m4 autom4te.cache Makefile
+	cd src && $(MAKE) distclean
+	cd apache2 && $(MAKE) distclean
+	cd spidermonkey && $(MAKE) $(SM_MFLAGS) OBJDIR=$(SM_OBJDIR) -f Makefile.ref clobber
+#	cd modules && $(MAKE) distclean
+
+run:
+	$(MAKE)
+	sudo $(MAKE) install
+	cd apache2 && $(MAKE) run
+
+debug:
+	$(MAKE)
+	sudo $(MAKE) install
+	cd apache2 && $(MAKE) debug
+
+valgrind:
+	$(MAKE)
+	sudo $(MAKE) install
+	cd apache2 && $(MAKE) valgrind

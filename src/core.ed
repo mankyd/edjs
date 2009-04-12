@@ -1,0 +1,87 @@
+/*
+ * ***** BEGIN LICENSE BLOCK *****
+ * Copyright 2009 Dave Mankoff (mankyd@gmail.com)
+ * License Version: GPL 3.0
+ *
+ * This file is part of EDJS 0.x
+ *
+ * EDJS is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * EDJS is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with EDJS.  If not, see <http://www.gnu.org/licenses/>.
+ * ***** END LICENSE BLOCK *****
+ */
+
+Object.prototype.merge = function() {
+    var i;
+    var j;
+    for (i = 0; i < arguments.length; i++) {
+        if (typeof(arguments[i]) != 'object')
+            continue;
+        for (j in arguments[i]) {
+            if (isUndefined(this[j]))
+                this[j] = arguments[i][j];
+        }
+    }
+
+    return this;
+};
+
+Function.prototype.bind = function() {
+    if (arguments.length < 2 && typeof(arguments[0]) == 'undefined') return this;
+    var __method = this, args = Array.prototype.slice.apply(arguments), object = args.shift();
+    return function() {
+      return __method.apply(object, args.concat(Array.prototype.slice.apply(arguments)));
+    }
+};
+
+Function.prototype.wrap = function(wrapper) {
+    var __method = this;
+    return function() {
+      return wrapper.apply(this, [__method.bind(this)].concat(Array.prototype.slice.apply(arguments)));
+    }
+};
+
+var trim = function(str) {
+	return str.replace(/^\s+|\s+$/g,"");
+};
+var trimRight = function(str) {
+	return str.replace(/^\s+/,"");
+};
+var trimLeft = function(str) {
+	return str.replace(/\s+$/,"");
+};
+
+String.prototype.trim = trim.wrap(function(p) { return p(this); });
+String.prototype.trimRight = trimRight.wrap(function(p) { return p(this); });
+String.prototype.trimLeft = trimLeft.wrap(function(p) { return p(this); });
+
+var quote = function (str) {
+    return '"'+str.replace(/(['"\\])/g, "\\$1")+'"'; //" //this " fixes bad syntax highlighters
+};
+
+var unquote = function(str) {
+    if (str.length < 2)
+        return str;
+
+    var first = str[0];
+    var last = str[str.length-1];
+
+    if (first != last ||
+        first != '"' && first != "'")
+        return str;
+
+    return str.substr(1, str.length-2).replace(/\\(['"\\])/g, '$1'); //' // this ' fixes bad highlighters
+}
+
+String.prototype.quote = quote.wrap(function(p) { return p(this); });
+String.prototype.unquote = unquote.wrap(function(p) { return p(this); });
+

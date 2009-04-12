@@ -1,0 +1,62 @@
+ # ##### BEGIN LICENSE BLOCK #####
+ # Copyright 2009 Dave Mankoff (mankyd@gmail.com)
+ # License Version: GPL 3.0
+ #
+ # This file is part of EDJS 0.x
+ #
+ # EDJS is free software: you can redistribute it and/or modify
+ # it under the terms of the GNU General Public License as published by
+ # the Free Software Foundation, either version 3 of the License, or
+ # (at your option) any later version.
+ #
+ # EDJS is distributed in the hope that it will be useful,
+ # but WITHOUT ANY WARRANTY; without even the implied warranty of
+ # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ # GNU General Public License for more details.
+ #
+ # You should have received a copy of the GNU General Public License
+ # along with EDJS.  If not, see <http://www.gnu.org/licenses/>.
+ # ##### END LICENSE BLOCK #####
+
+CC=@CC@
+INSTALL=@INSTALL@
+
+INCLUDES=@LIB_INCLUDES@
+CFLAGS=@LIB_CFLAGS@
+LDLIBS=@LIB_LDLIBS@
+LDFLAGS=@LIB_LDFLAGS@
+EDJS_SETTINGS_FILE_LOC=@EDJS_SETTINGS_FILE_LOC@
+EDJS_CORE_FILE_LOC=@EDJS_CORE_FILE_LOC@
+EDJS_MOD_LOC=@EDJS_MOD_LOC@
+srcdir=.
+
+LIB_SRCS=	edjs.c core.c error.c util.c
+
+.PHONY: libedjs
+
+all: libedjs
+
+libedjs: libedjs.so
+
+libedjs.so: $(LIB_SRCS)
+	@echo 
+	@echo 'Compiling libedjs.so'
+	@echo 
+	$(CC) $(INCLUDES) $(CFLAGS) $(LIB_SRCS) $(LDFLAGS) $(LDLIBS) -Wall -shared -o libedjs.so
+
+clean:
+	rm -rf $(OBJS) core *~ .libs *.o *.slo *.lo *.la *.so 
+
+distclean: clean
+	rm -f Makefile .depend .install
+
+install:
+	$(INSTALL) -D libedjs.so /usr/lib/
+	$(INSTALL) -d $(EDJS_MOD_LOC)
+	@cat settings.ed | sed s/%EDJS_MOD_LOC%/`echo "$(EDJS_MOD_LOC)" | sed s~\/~\\\\\\\/~g`/g > settings.ed.tmp
+	$(INSTALL) -D settings.ed.tmp $(EDJS_SETTINGS_FILE_LOC)
+	@rm settings.ed.tmp
+	$(INSTALL) -D core.ed $(EDJS_CORE_FILE_LOC)
+
+
+

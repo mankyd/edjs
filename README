@@ -1,0 +1,167 @@
+Copyright 2009 Dave Mankoff (mankyd@gmail.com)
+License Version: GPL 3.0
+This is the README file for EDJS 0.x
+
+Table of Contents
+================
+1) Introduction
+1.1) libedjs
+1.2) mod_edjs
+
+2) Building and Installing EDJS
+2.1) Dependencies and Requirements
+2.2) libedjs only
+2.3) mod_edjs only
+2.4) SpideMonkey Notes
+2.5) Installing Header Files
+
+
+1. Introduction
+===============
+EDJS is a set of tools built to provide http-server javascript. It 
+consists currently of two major parts: libedjs and mod_edjs. Although
+buitlt with http-servers in mind libedjs is little more than a thin
+wrapper around a 3rd part javascript engine (currently Mozilla's 
+Spidermonkey.) mod_edjs is an Apache HTTPD module that provides 
+support for CGI javascript.
+
+EDJS comes with a fully functional copy of of the source code for 
+Mozilla's SpiderMonkey javscript engine, v1.8RC1.
+
+
+1.1 libedjs
+===========
+libedjs is the core library behind the EDJS project. It is a thin 
+wrapper around a javascript engine (currently Mozilla's SpiderMonkey)
+that allows for easy integration of javascript into other progams.  
+Although EDJS was created with http-servers in mind, libedjs is in no
+way tailored towards HTTP usage patterns. The HTTP features of EDJS
+are provided by the HTTP specific projects.
+
+On top of the javascript engine, EDJS adds functionality for 
+plugins/modules, system wide engine settings, and a host of useful 
+javascript  functions now provided by the core ECMA script standard. 
+This includes an import function similar to Python; a settings file
+that specifies max-execution time and a search  path; and a set of 
+utility functions that are often used, such as a toJSON function, a 
+copy function, and a clone function.
+
+
+1.2 mod_edjs
+============
+mod_edjs is a Apache2 server module that allows javascript to be 
+EDJS was built with http-server. On top of libedjs, mod_edjs adds 
+a handful of HTTP specific features, such as cookies, request data,
+and sessions. It allows you to turn individual scripts into
+individual pages (i.e. http://example.com/page.ed, like php) or to
+filter all requests through a single file, allowing simple, 
+programatic url matching (like mod_rewrite), or you can use a 
+combination fo the two.
+
+
+2. Building and Installing EDJS
+===============================
+Building and installing EDJS can be as simple as running:
+
+  > aclocal
+  > autoconf
+  > ./configure
+  > make
+  > sudo make install
+
+When running make, your system will attempt to compile 3 things:
+Mozilla's SpiderMonkey, libedjs, and mod_edjs. It will also install
+the files to the correct location.
+
+Note that to get mod_edjs running under Apache, you will still need to
+edit your apache configuration file and add the following where 
+appropriate:
+
+  LoadModule edjs_module mod_edjs.so
+
+  <IfModule edjs_module>
+    AddHandler edjs .ed
+  </IfModule>
+
+  DirectoryIndex index.ed #... other files as appropriate
+
+Exactly where and how you add those commands is distribution dependant.
+
+
+2.1 Dependencies and Requirements
+=================================
+To build and install EDJS, you will need the following build tools:
+
+  gcc
+  automake
+  autoconf
+  apxs2 (part of Apache's build tools, sometimes searchable as apxs)
+
+Though libedjs has minimal dependencies, both SpiderMonkey and
+mod_edjs add a small number of requirements. Note the libedjs will
+statically link SpiderMonkey (libjs) into itself, so SpiderMonkey's
+dependencies become it's own. Of course, you will need the development
+version of these packages to compile EDJS.
+
+  nspr4
+  apache2
+  apreq2
+
+
+2.2 libedjs only
+================
+To build edjs, you must also build SpiderMonkey. SpiderMonkey depends 
+upon nspr4. You will need all of the build tools listed above except
+for apxs2. Once you have nspr4 and all of the build tools, you can run
+the following to compile and install libedjs:
+
+  > make libedjs
+  > sudo make install-libedjs
+
+
+2.3 mod_edjs only
+=================
+mod_edjs does require libedjs. If you have already built and installed
+libedjs, however, you can run the follwoing to compile and install 
+mod_edjs:
+
+  > make mod_edjs
+  > sudo make install-mod_edjs
+
+mod_edjs requires the apxs2 build tools allong with apache2 and apre2
+development files.
+
+
+2.4 SpideMonkey Notes
+=====================
+EDJS comes with its own version of the SpiderMonkey library instead of
+relying on the system's version due to the inconsistent version of 
+SpiderMonkey builds on various systems. EDJS compiles SpiderMonkey with
+2 important flags set: JS_THREADSAFE and JS_HAS_FILE_OBJECT. Note that
+because libedjs has libjs statically compiled into it, it should 
+function much the same as libjs to those interested in compiling against
+it. You will still need the jsapi.h header file and other SpiderMonkey
+and other associated spidermonkey headers to compile programs against
+libedjs. See the section 2.5 "Installing Header Files" for details.
+
+
+2.5 Installing Header Files
+===========================
+By default, make install only installs EDJS binary files. If you'd like 
+to compile your own programs against libedjs, run the following commands:
+
+  > make spidermonkey
+  > sudo make install-headers
+
+This will install edjs.h as well as all the needed SpiderMonkey headers
+into /usr/includes/edjs/
+
+You will then be able to compile your own programs against libedjs using
+the following commands:
+
+  > gcc hello_world.c -ledjs -I/usr/include/edjs -o hello_world
+
+At the top of your source files, you would put:
+
+  #include "jsapi.h"
+  #include "edjs.h"

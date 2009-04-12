@@ -1,0 +1,93 @@
+ # Copyright 2004 Apache Software Foundation
+ #
+ #  Licensed under the Apache License, Version 2.0 (the "License");
+ #  you may not use this file except in compliance with the License.
+ #  You may obtain a copy of the License at
+ #
+ #      http://www.apache.org/licenses/LICENSE-2.0
+ #
+ #  Unless required by applicable law or agreed to in writing, software
+ #  distributed under the License is distributed on an "AS IS" BASIS,
+ #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ #  See the License for the specific language governing permissions and
+ #  limitations under the License.
+ #
+ # Originally developed by Gregory Trubetskoy.
+ #
+
+CC=@CC@
+INSTALL=@INSTALL@
+
+INCLUDES=@INCLUDES@
+CFLAGS=@CFLAGS@
+LDLIBS=@LDLIBS@
+LDFLAGS=@LDFLAGS@
+#EDJS_MOD_LOC=@EDJS_MOD_LOC@
+EDJS_MOD_LOC=/usr/lib/edjs/modules/
+srcdir=.
+
+PG_CFLAGS=@PG_CFLAGS@
+PG_INCLUDES=@PG_INCLUDES@
+PG_LDFLAGS=@PG_LDFLAGS@
+PG_LIBS=@PG_LIBS@
+
+MYSQL_CFLAGS=@MYSQL_CFLAGS@
+MYSQL_INCLUDES=@MYSQL_INCLUDES@
+MYSQL_LDFLAGS=@MYSQL_LDFLAGS@
+MYSQL_LIBS=@MYSQL_LIBS@
+
+SQLITE3_CFLAGS=@SQLITE3_CFLAGS@
+SQLITE3_INCLUDES=@SQLITE3_INCLUDES@
+SQLITE3_LDFLAGS=@SQLITE3_LDFLAGS@
+SQLITE3_LIBS=@SQLITE3_LIBS@
+
+SRCS =         edjsdb.c
+PG_SRCS =      edjsdb_pg.c
+MYSQL_SRCS =   edjsdb_mysql.c
+SQLITE3_SRCS = edjsdb_sqlite3.c
+
+all:	@ALL@
+
+db: db.so
+
+db.so:$(SRCS)
+	$(CC) $(CFLAGS) $(SRCS) $(LDFLAGS) $(LDLIBS) -g -o db.so
+
+db_pg: db_pg.so
+
+db_pg.so: $(PG_SRCS)
+	$(CC) $(PG_CFLAGS) $(PG_INCLUDES) $(PG_SRCS) $(PG_LDFLAGS) $(PG_LIBS) -o db_pg.so
+
+db_mysql: db_mysql.so
+
+db_mysql.so: $(MYSQL_SRCS)
+	$(CC) $(MYSQL_CFLAGS) $(MYSQL_INCLUDES) $(MYSQL_SRCS) $(MYSQL_LDFLAGS) $(MYSQL_LIBS) -o db_mysql.so
+
+db_sqlite3: db_sqlite3.so
+
+db_sqlite3.so: $(SQLITE3_SRCS)
+	$(CC) $(SQLITE3_CFLAGS) $(SQLITE3_INCLUDES) $(SQLITE3_SRCS) $(SQLITE3_LDFLAGS) $(SQLITE3_LIBS) -o db_sqlite3.so
+
+clean:
+	rm -rf $(OBJS) *.so *~ .libs *.o *.slo *.lo *.la 
+
+distclean: clean
+	rm -rf Makefile .depend .install autom4te.cache config.status
+
+install: @ALL@ @INSTALL_ALL@
+
+install-db:
+	$(INSTALL) -D db.so $(EDJS_MOD_LOC)
+
+install-db_pg:
+	$(INSTALL) -D db_pg.so $(EDJS_MOD_LOC)
+
+install-db_mysql:
+	$(INSTALL) -D db_mysql.so $(EDJS_MOD_LOC)
+
+install-db_sqlite3:
+	$(INSTALL) -D db_sqlite3.so $(EDJS_MOD_LOC)
+
+# DO NOT DELETE THIS LINE
+
+
