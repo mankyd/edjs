@@ -278,7 +278,7 @@ static JSBool edjs_Import(JSContext *cx, JSObject *obj, uintN argc, jsval *argv,
             buffer[file_size+25] = '\0';
             if (JS_FALSE == JS_EvaluateScript(cx, obj, 
                                               buffer, file_size+25, full_path,
-                                              0, &(argv[argc+1]))) {
+                                              1, &(argv[argc+1]))) {
                 EDJS_ERR(cx, EDJSERR_INITING_MODULE, JS_GetStringBytes(file_str));
                 goto error;
             }
@@ -885,7 +885,7 @@ static const char *edjs_ParseJSONObject(const char *str_char) {
     do {
         do {
             it += sizeof(char);
-        } while (' ' == *it && '\0' != *it); //fix me: allow all whitespace characters
+        } while ((' ' == *it || '\r' == *it || '\n' == *it || '\t' == *it ) && '\0' != *it); //fix me: allow all whitespace characters
 
         if ('\0' == *it)
             goto error;
@@ -900,7 +900,7 @@ static const char *edjs_ParseJSONObject(const char *str_char) {
         if (tmp == it)
             goto error;
 
-        while (' ' == *it && '\0' != *it) {//fix me: allow all whitespace characters
+        while ((' ' == *it || '\r' == *it || '\n' == *it || '\t' == *it ) && '\0' != *it) {//fix me: allow all whitespace characters
             it += sizeof(char);
         }
 
@@ -912,11 +912,11 @@ static const char *edjs_ParseJSONObject(const char *str_char) {
         
         do {
             it += sizeof(char);
-        } while (' ' == *it && '\0' != *it); //fix me: allow all whitespace characters
+        } while ((' ' == *it || '\r' == *it || '\n' == *it || '\t' == *it ) && '\0' != *it); //fix me: allow all whitespace characters
             
         it = edjs_ParseJSONValue(it); //note: json spec does not allow empty elements. we do.
             
-        while (' ' == *it && '\0' != *it) {//fix me: allow all whitespace characters
+        while ((' ' == *it || '\r' == *it || '\n' == *it || '\t' == *it ) && '\0' != *it) {//fix me: allow all whitespace characters
             it += sizeof(char);
         }
     } while (',' == *it && '\0' != *it);
@@ -1756,7 +1756,7 @@ static JSBool edjs_QuoteString(JSContext *cx, const char* input, char **ret, int
     //now loop over the input. for any " we find, add one to the length for an escape char
 
     for (cp0 = input; *cp0 != '\0'; cp0++) {
-        if (*cp0 == '"' || *cp0 == '\'' || *cp0 == '\\')
+        if (*cp0 == '"' || *cp0 == '\'' || *cp0 == '\\' || *cp0 == '\n' || *cp0 == '\r')
             (*len)++;
     }
     *ret = (char *)JS_malloc(cx, (*len)+1); //+1 for \0
@@ -1766,11 +1766,20 @@ static JSBool edjs_QuoteString(JSContext *cx, const char* input, char **ret, int
     **ret = '"';
 
     for (cp0 = input, cp1 = (*ret)+1; *cp0 != '\0'; cp0++, cp1++) {
-        if (*cp0 == '"' || *cp0 == '\'' || *cp0 == '\\') {
+        if (*cp0 == '"' || *cp0 == '\'' || *cp0 == '\\' || *cp0 == '\n' || *cp0 == '\r') {
             *cp1 = '\\';
             cp1++;
         }
-        *cp1 = *cp0;
+        switch(*cp0) {
+        case '\n':
+            *cp1 = 'n';
+            break;
+        case '\r':
+            *cp1 = 'r';
+            break;
+        default:
+            *cp1 = *cp0;
+        }
     }
 
     *cp1 = '"';

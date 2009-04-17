@@ -1,0 +1,940 @@
+var default_options = {
+    template_dir: '.',
+    compile_dir: '.',
+    ldelim: '{',
+    rdelim: '}',
+    escape_variables: false,
+    force_compile: false
+};
+
+
+var Template = function(template, options) {
+    this.template = template;
+    options = options || {};
+    this.options = Object.merge(options, default_options);
+};
+
+Template.setDefaultOptions = function(options) {
+    if (options.template_dir)
+        default_options.template_dir = options.template_dir;
+    if (options.compile_dir)
+        default_options.compile_dir = options.compile_dir;
+}
+
+Template.prototype = {
+    register_function: function(name, f) {
+        this.functions[name] = f;
+    },
+
+    blocks: {
+        'blck': function(text, options, params) {
+            return text;
+        }
+    },
+
+    functions: {
+        'tag': function(params) {
+            return params.x && params.val  ? params.val : 'hi';
+        }
+    },
+
+    modifiers: {
+        'caps': function(str) {
+            return String.toUpperCase(str);
+        },
+        'lower': function(str) {
+            return String.toLowerCase(str);
+        }
+    },
+
+    vars: {
+        'asdf': {asdf: 'lkjlkj'}
+    },
+
+    math_operators: ['*', '/', '%', '+', '-'],
+    bool_operators: ['===', '!==', '&&', '||', '>', '<', '<=', '>=', '==', '!='],
+    if_depth: 0,
+    else_depth: 0,
+    tag_stack: [],
+    internal_vars: {},
+
+    exec: function(str) {
+        include.call(this, this.compile_file(this.template));
+        this.main.bind(this)().echo();
+        return this;
+    },
+
+    compile_file: function(template_name) {
+        var input_file = new File(this.options.template_dir+'/'+template_name);
+        var output_file = new File(this.options.compile_dir+'/'+template_name+'.ed');
+
+        if (this.options.force_compile || 
+            !output_file.exists || 
+            output_file.lastModified.getTime() < input_file.lastModified.getTime()) {
+            if (!input_file.exists) {
+                throw new Error('requested template does not exist: '+input_file.path);
+            }
+            input_file.open('read', 'text');
+            str = input_file.readAll().join("\n");
+            input_file.close();
+
+            var code = this.compile(str);
+            output_file.open('write,create,replace', 'text');
+            output_file.write(code);
+            output_file.close();
+        }
+
+        return output_file.path;
+    },
+
+    compile: function(str) {
+        var ret = '';
+        var settings_json = {};
+        var child_blocks = {};
+        var compiled_results = '';
+        var i;
+        if (!str) {
+            throw new Error("No template code given");
+        }
+
+        settings_json = str.extractJSON();
+        if (settings_json) {
+            str = str.substr(settings_json.length+1);
+            settings_json = eval('settings_json='+settings_json);
+        }
+        else
+            settings_json = {};
+        settings_json = Object.merge(settings_json, {"extends":false});
+
+        if (settings_json['extends']) {
+            ret += "include.call(this, '"+this.compile_file(settings_json['extends'])+"');\n";
+        }
+
+        ret += "settings = {};\n";
+        [child_blocks, compiled_results, str] = this.parseSection(str, false, 0);
+        ret += compiled_results;
+        for (i in child_blocks) {
+            if (i == 'main' && settings_json['extends'])
+                continue; //never overwrite the main function in sub-templates
+            ret += "var f = function() {\n";
+            ret += '    var parent = this["'+i+"\"];\n"; 
+            ret += child_blocks[i];
+            ret += "    return text[depth];\n";
+            ret += "}\n";
+            ret += 'this["'+i+"\"] = f;\n"; 
+
+        }
+        return ret;
+    },
+
+    leadingSpaces: function(depth) {
+        lead = '';
+        var i;
+        for (i = 0; i < depth; i++)
+            lead += '    ';
+
+        return lead;
+    },
+
+    eachItem: function(object, callback, empty_callback) {
+    },
+
+    parseSection: function(str, tagName, depth) {
+        //assumes that the opening tag has been stripped away
+        //if tagName is false, it will read till str is empty
+
+        var compiled = '';
+        var matches = [];
+        var lead = this.leadingSpaces(1); //sections are always output at depth 1... for now
+        var i;
+        var sections = {};
+        var returned_sections;
+        var returned_compiled;
+
+        compiled += lead + "var text = [''];\n";
+        compiled += lead + "var bl = [];\n";
+        compiled += lead + "var depth = 0;\n";
+
+        if (tagName) {
+            [sections, returned_compiled, str] = this.parseTillClosingTag(str, 'section '+tagName, 0);
+            compiled += returned_compiled;
+            sections['section_'+tagName] = compiled;
+        }
+        else {
+            [sections, returned_compiled, str] = this.parseTillClosingTag(str, tagName, 0);
+            compiled += returned_compiled;
+            sections['main'] = compiled;
+        }
+        compiled += returned_compiled;
+        compiled += lead + "return text[depth];\n";
+
+        return [sections, '', str];
+    },
+
+    quoteString: function(str) {
+        return JSON.stringify(str);
+    },
+
+    escape: function(str, force) {
+        if (isUndefined(str))
+            return 'undefined';
+        if (force === true || this.options.escape_variables === true && isUndefined(force))
+            return str.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/&/g, '&amp;').replace(/"/g, '&quote;'); //"
+        return str;
+    },
+
+    parseTag: function(str, depth) {
+        var matches;
+        var i;
+        var id;
+        var tag_name;
+        var returned_sections;
+        var returned_compiled;
+        var escape;
+        var lead = this.leadingSpaces(depth);
+
+        //assumes that str starts with ldelim
+        str = str.substr(this.options.ldelim.length).trimLeft();
+
+        //are we at the start of a comment?
+        if (str[0] == '*') {
+            return [{}, '', this.parseComment(str.substr(1))[0]];
+        }
+        //are we looking at the start of a section?
+        else if (str.match(/^section\s/)) {
+            str = str.replace(/^section\s+/, '');
+            i = str.indexOf(this.options.rdelim);
+            if (-1 == i)
+                throw new Error("closing delimiter not found for start of section");
+            tag_name = str.substr(0, i).trim();
+            [returned_sections, returned_compiled, str] = this.parseSection(str.substr(i+1), tag_name, depth);
+            returned_compiled += lead+"text[depth] += section_"+tag_name+"();\n";
+            return [returned_sections, returned_compiled, str];
+        }
+        else {
+            [returned_sections, returned_compiled, str] = this.parseSpecial(str, depth);
+            if (returned_compiled !== false) {
+                return [returned_sections, returned_compiled, str];
+            }
+
+            [returned_sections, returned_compiled, str] = this.parseBlock(str, depth);
+            if (returned_compiled !== false) {
+                return [returned_sections, returned_compiled, str];
+            }
+
+            [id, str] = this.parseFunction(str);
+            if (id !== false) {
+                return [{}, lead+"text[depth] += "+id+";\n", str];
+            }
+
+            [id, escape, str] = this.parseFormula(str, true);
+            if (id !== false) {
+                if (str.trimLeft().indexOf(this.options.rdelim) !== 0)
+                    throw new Error("No closing delim found");
+
+                return [{}, lead+"text[depth] += this.escape("+id+", "+escape+");\n", str.trimLeft().substr(this.options.rdelim.length)];
+            }
+
+        }
+
+
+        return [{}, '', ''];
+    },
+
+    parseComment: function(str) {
+        var i = str.indexOf('*'+this.options.rdelim);
+        if (i === -1)
+            return [''];
+
+        return [str.substr(i+1+this.options.rdelim.length)];
+    },
+
+    parseValue: function(str) {
+        var id;
+        [id, str] = this.parseNumber(str);
+        if (id === false) {
+            [id, str] = this.parseString(str); 
+            if (id === false) {
+                [id, str] = this.parseVariable(str);
+                if (id === false) {
+                    [id, str] = this.parseJSONObject(str);
+                    if (id === false) {
+                        [id, str] = this.parseJSONArray(str);
+                    }
+                }
+            }
+        }
+        return [id, str];
+    },
+
+    parseFormula: function(str, allow_modifiers) {
+        //fix me: allow parentheses
+        //fix me: allow ! in front of variables
+        var id;
+        var ret = '';
+        var parse_str = str;
+        var mod_left = false;
+        var mod_right = false;
+        var escape = undefined;
+        [id, parse_str] = this.parseValue(parse_str);
+        if (id === false)
+            return [false, str];
+        ret += id;
+        do {
+            [id, parse_str] = this.parseMathOperator(parse_str);
+            if (id !== false) {
+                ret += id;
+                [id, parse_str] = this.parseValue(parse_str);
+                if (id === false) {
+                    throw new Error("Incomplete value formula");
+                }
+                ret += id;
+            }
+        } while(id !== false);
+
+        if (allow_modifiers) {
+            [mod_left, mod_right, escape, parse_str] = this.parseModifiers(parse_str);
+            if (mod_left !== false) {
+                ret = mod_left + ret + mod_right;
+            }
+        }
+        return ['('+ret+')', escape, parse_str];
+    },
+
+    parseIdentifier: function(str) {
+        var id_regex = /^\s*([a-zA-Z_][a-zA-Z0-9_]*)/;
+        var m = id_regex.exec(str);
+        if (m === null)
+            return [false, str];
+
+        return [m[1], str.substr(m[0].length)];
+    },
+
+    parseVariable: function(str) {
+        var parse_str = str.trimLeft();
+        var id;
+        var compiled = '';
+        [id, parse_str] = this.parseIdentifier(parse_str);
+
+        if (id === false)
+            return [false, str];
+
+        compiled += 'this.vars["'+id+'"]';
+        do {
+            id = false;
+            parse_str = parse_str.trimLeft();
+            if (parse_str[0] === '.') {
+                parse_str = parse_str.substr(1).trimLeft();
+                [id, parse_str] = this.parseIdentifier(parse_str);
+                if (id === false) {
+                    throw new Error("error parsing variable");
+                }
+                compiled += '['+this.quoteString(id)+']';
+            }
+            else if (parse_str[0] == '[') {
+                parse_str = parse_str.substr(1).trimLeft();
+                [id, , parse_str] = this.parseFormula(parse_str);
+                if (id === false) {
+                    throw new Error("error parsing variable");
+                }
+                parse_str = parse_str.trimLeft();
+                if (parse_str[0] !== ']') {
+                    throw new Error("error parsing variable");
+                }
+                parse_str = parse_str.substr(1);
+                compiled += '['+id+']';
+           }
+        } while (id !== false);
+
+        return [compiled, parse_str];
+    },
+
+    parseNumber: function(str) {
+        //fix me: allow scientific notation
+        var num_regex = /^\s*((-|\+)?\d+)/;
+        var m = num_regex.exec(str);
+        if (m === null)
+            return [false, str];
+
+        return [m[1], str.substr(m[0].length)];
+    },
+
+    parseMathOperator: function(str) {
+        var parse_str = str.trimLeft();
+        var op;
+        for each (op in this.math_operators) {
+            if (parse_str.indexOf(op) == 0)
+                return [op, parse_str.substr(op.length)];
+        }
+        return [false, str];
+    },
+
+
+    parseString: function(str) {
+        var parse_str = str.trimLeft();
+        var delim;
+        var i;
+        var len;
+        if (parse_str[0] == "'" || parse_str[0] == '"') {
+            len = parse_str.length;
+            ret = st = parse_str[0];
+            delim = parse_str[0];
+
+            for (i = 1; i < len && parse_str[i] !== delim; i++) {
+                if (parse_str[i] === '\\')
+                    i++;
+            }
+
+            if (parse_str[i] === delim)
+                return [parse_str.substr(0, i+1), parse_str.substr(i+1)];
+            
+            if (len > 20)
+                throw new Error('unterminated string: '+parse_str.substr(0, 20) +' ...');
+            throw new Error('unterminated string: '+parse_str);
+        }
+
+        return [false, str];
+    },
+
+    parseJSONObject: function(str) {
+        var parse_str = str.trimLeft();
+        var id;
+        var val;
+        var compiled = '{';
+        var first = true;
+        if (parse_str[0] != '{')
+            return [false, str];
+
+        do {
+            parse_str = parse_str.substr(1).trimLeft();
+            if (parse_str[0] === ',') //empty value
+                continue;
+            if (parse_str[0] !== '}') {
+                [id, parse_str] = this.parseNumber(parse_str);
+                if (id === false) {
+                    [id, parse_str] = this.parseString(parse_str);
+                    if (id === false) {
+                        [id, parse_str] = this.parseIdentifier(parse_str);
+                        if (id === false) {
+                            return [false, str];
+                        }   
+                    }
+                }
+
+                parse_str = parse_str.trimLeft();
+                if (parse_str[0] != ':')
+                    return [false, str];
+
+                [val, , parse_str] = this.parseFormula(parse_str.substr(1).trimLeft(), true);
+                if (val === false)
+                    return [false, str];
+
+                parse_str = parse_str.trimLeft();
+                compiled += (first ? '' : ', ') +id + ': '+val;
+                first = false;
+            }
+        } while (parse_str[0] == ',');
+
+        if (parse_str[0] != '}')
+            return [false, str];
+
+        return [compiled+'}', parse_str.substr(1)];
+    },
+
+    parseJSONArray: function(str) {
+        var parse_str = str.trimLeft();
+        var val;
+        var compiled = '[';
+        var first = true;
+        if (parse_str[0] != '[')
+            return [false, str];
+
+        do {
+            parse_str = parse_str.substr(1).trimLeft();
+            if (parse_str[0] === ',') //empty value
+                continue;
+            if (parse_str[0] !== ']') {
+                [val, , parse_str] = this.parseFormula(parse_str, true);
+                if (val === false) {
+                    return [false, str];
+                }
+                compiled += (first ? '' : ', ') +val;
+                first = false;
+            }
+        } while (parse_str[0] == ',');
+
+        if (parse_str[0] != ']')
+            return [false, str];
+
+        return [compiled+']', parse_str.substr(1)];        
+    },
+
+    parseFunction: function(str) {
+        var parse_str;
+        var id;
+        var props;
+        var mod_left;
+        var mod_right;
+        [id, parse_str] = this.parseIdentifier(str);
+        if (id === false)
+            return [false, str];
+
+        if (isUndefined(this.functions[id]))
+            return [false, str];
+
+        [mod_left, mod_right, , parse_str] = this.parseModifiers(parse_str);
+
+        [props, parse_str] = this.parseProperties(parse_str);
+
+        if (parse_str.trimLeft().indexOf(this.options.rdelim) !== 0)
+            return [false, str];
+
+        return [(mod_left !== false ? mod_left : '' )+'this.functions["'+id+'"]('+props+')'+(mod_right !== false ? mod_right : '' ), parse_str.trimLeft().substr(this.options.rdelim.length)];
+    },
+
+    parseBlock: function(str, depth) {
+        var id;
+        var compiled = '';
+        var returned_compiled = '';
+        var sections = {};
+        var lead = this.leadingSpaces(depth);
+        var props = '';
+        var i;
+        var mod_left;
+        var mod_right;
+        [id, parse_str] = this.parseIdentifier(str);
+        if (id === false)
+            return [sections, false, str];
+
+        if (isUndefined(this.blocks[id]))
+            return [sections, false,  str];
+
+        [mod_left, mod_right, , parse_str] = this.parseModifiers(parse_str);
+        
+        [props, parse_str] = this.parseProperties(parse_str);
+
+        parse_str = parse_str.trimLeft();
+        if (parse_str.indexOf(this.options.rdelim) !== 0) {
+            return [sections, false,  str];
+        }
+
+        parse_str = parse_str.substr(this.options.rdelim.length);
+
+        compiled += lead+"depth++\n";
+        compiled += lead+"bl[depth] = {repeat: true};\n";
+        compiled += lead+"text[depth] = '';\n";
+        compiled += lead+"text[depth-1] += "+(mod_left ? mod_left : '')+"this.blocks['"+id+"'](text[depth], bl[depth], "+props+")"+(mod_right ? mod_right : '')+";\n";
+        compiled += lead+"while(bl[depth].repeat) {\n";
+        compiled += lead+"    text[depth] = '';\n";
+        compiled += lead+"    bl[depth].repeat = false;\n";
+        [sections, returned_compiled, parse_str] = this.parseTillClosingTag(parse_str, id, depth);
+        compiled += returned_compiled;
+        compiled += lead+"    text[depth-1] += "+(mod_left ? mod_left : '')+"this.blocks['"+id+"'](text[depth], bl[depth], "+props+")"+(mod_right ? mod_right : '')+";\n";        
+        compiled += lead+"}\n";
+        compiled += lead+"depth--;\n";
+
+        return [sections, compiled, parse_str];
+    },
+
+    parseTillClosingTag: function(str, tagName, depth) {
+        //assumes that the opening tag has been stripped away
+        //if tagName is false, it will read till str is empty
+
+        var compiled = '';
+        var matches = [];
+        var lead = this.leadingSpaces(depth); //sections are always output at depth 0... for now
+        var i = 0;
+        var sections = {};
+        var returned_sections;
+        var returned_compiled;
+        var parse_str = str;
+        
+        while (parse_str.length) {
+            i = parse_str.indexOf(this.options.ldelim);
+            switch(i) {
+            case -1:
+                if (tagName)
+                    throw new Error("Matching close tag not found for "+tagName);
+                compiled += (lead + 'text[depth] += '+this.quoteString(parse_str)+";\n");
+                parse_str = '';
+                break;
+            case 0:
+                //see if we're at the closing tag
+                if (tagName && 
+                    parse_str.substr(this.options.ldelim.length).trimLeft()[0] == '/' && //any closing tag
+                    parse_str.substr(this.options.ldelim.length).trimLeft().substr(1).trimLeft().indexOf(tagName) == 0 && //specific closing tag
+                    parse_str.substr(this.options.ldelim.length).trimLeft().substr(1).trimLeft().substr(tagName.length).trimLeft().indexOf(this.options.rdelim) == 0) { //complete closing tag
+
+                    parse_str = parse_str.substr(this.options.ldelim.length).trimLeft().substr(1).trimLeft().substr(tagName.length).trimLeft().substr(this.options.rdelim.length);
+
+                    return [sections, compiled, parse_str];
+                }
+
+                [returned_sections, returned_compiled, parse_str] = this.parseTag(parse_str, depth+1);
+                sections = Object.merge(sections, returned_sections);
+                compiled += returned_compiled;
+
+                break;
+            default:
+
+                compiled += (lead + '    text[depth] += '+this.quoteString(parse_str.substr(0,i))+";\n");
+                parse_str = parse_str.substr(i);
+
+            }
+        }
+
+        if (tagName) //if a closing tag was specified, we should never get this far
+            throw new Error("Matching close tag not found for "+tagName);
+
+        return [sections, compiled, ''];
+    },
+
+    parseProperties: function(str) {
+        var props = "{";
+        var parse_str = str.trimLeft();
+        var id = false;
+        var val = true;
+        while (parse_str.length && parse_str.indexOf(this.options.rdelim) !== 0) {
+            [id, parse_str] = this.parseIdentifier(parse_str);
+            parse_str = parse_str.trimLeft();
+            if (id === false) {
+                if (parse_str.indexOf(this.options.rdelim) !== 0)
+                    throw Error ("No closing delimiter found");
+            }
+            else {
+                val = 'true';
+                if (parse_str[0] === '=') {
+                    parse_str = parse_str.substr(1).trimLeft();
+                    [val, , parse_str] = this.parseFormula(parse_str, true);
+                    if (val === false)
+                        throw new Error("Did not understand property value");
+                }
+                props += this.quoteString(id)+': '+val+', ';
+                parse_str = parse_str.trimLeft();
+            }
+        }
+
+        return [props+"}", parse_str];
+    },
+
+    parseModifiers: function(str) {
+        var parse_str = str.trimLeft();
+        var id;
+        var ret_left = '';
+        var params = '';
+        var ret_right = '';
+        var first_param;
+        var escape = undefined;
+
+        if (parse_str[0] !== '|')
+            return [false, false, undefined, str];
+
+        do {
+            parse_str = parse_str.substr(1);
+            [id, parse_str] = this.parseIdentifier(parse_str);
+            if (id === false)
+                throw new Error("Erroneous modifier syntax");
+
+            if (id == 'escape') {
+                escape = true;
+                parse_str = parse_str.trimLeft();
+                continue;
+            }
+            else if (id == 'noescape') {
+                escape = false;
+                parse_str = parse_str.trimLeft();
+                continue;
+            }
+            else if (isUndefined(this.modifiers[id]))
+                throw new Error("Unknown modifier: "+id);
+
+            ret_left = 'this.modifiers['+this.quoteString(id)+']('+ret_left;
+
+            parse_str = parse_str.trimLeft();
+            params = '';
+            while (parse_str[0] === ':') {
+                parse_str = parse_str.substr(1).trimLeft();
+                if (parse_str[0] === ':') {
+                    if (!first_param)
+                        params += ', ';
+                    else
+                        first_param = false;
+
+                    params += 'undefined';
+                }
+                else {
+                    [id, , parse_str] = this.parseFormula(parse_str, false);
+                    if (id === false)
+                        throw new Error("modifier parameter not understood");
+                    if (!first_param)
+                        params += ', ';
+                    else
+                        first_param = false;
+                    params += id;
+                    parse_str = parse_str.trimLeft();
+                }
+            }
+            ret_right += params+')';
+        } while (parse_str[0] === '|');
+
+        return [ret_left, ret_right, escape, parse_str];
+    },
+
+    parseSpecial: function(str, depth) {
+        var parse_str = str.trimLeft();
+        var compiled = false;
+        var sections = false;
+        var returned_compiled;
+        var i;
+        var props;
+        var lead = this.leadingSpaces(depth);
+
+        if (parse_str.match(/^if\s/)) {
+            parse_str = parse_str.replace(/^if\s+/, '');
+            [compiled, parse_str] = this.parseCondition(parse_str);
+            if (compiled !== false) {
+                if (parse_str.trimLeft().indexOf(this.options.rdelim) !== 0) {
+                    throw new Error("if condition not understood");
+                }
+                parse_str = parse_str.trimLeft().substr(this.options.rdelim.length);
+                compiled = lead+'if ('+compiled+") {\n";
+                this.tag_stack.push('if');
+                [sections, returned_compiled, parse_str] = this.parseTillClosingTag(parse_str, 'if', depth);
+                this.tag_stack.pop();
+
+                compiled += returned_compiled;
+                compiled += lead+"}\n";
+
+                return [sections, compiled, parse_str];
+
+            }
+        }
+        //fix me: prevent elseif after else
+        else if (parse_str.match(/^else\s*if\s/)) {
+            i = this.tag_stack[this.tag_stack.length-1];
+            if (i == 'else') {
+                throw new Error("Can not have elseif after else");
+            }
+            if (i != 'if' && i != 'elseif') {
+                throw new Error("else if used outside of if");
+            }
+
+            if (i == 'if') {
+                this.tag_stack.pop();
+                this.tag_stack.push('elseif');
+            }
+
+            parse_str = parse_str.replace(/^else\s*if\s+/, '');
+            [returned_compiled, parse_str] = this.parseCondition(parse_str);
+            if (returned_compiled !== false) {
+                if (parse_str.trimLeft().indexOf(this.options.rdelim) !== 0) {
+                    throw new Error("if condition not understood");
+                }
+                lead = this.leadingSpaces(depth-1);
+
+                parse_str = parse_str.trimLeft().substr(this.options.rdelim.length);
+                compiled = lead+"}\n";
+                compiled += lead + 'else if ('+returned_compiled+") {\n";
+                return [{}, compiled, parse_str];
+            }
+        }
+        else if (parse_str.match(/^else/) && 
+                 parse_str.substr(4).trimLeft().indexOf(this.options.rdelim) == 0) {
+            if (parse_str.substr(4).trimLeft().indexOf(this.options.rdelim) !== 0) {
+                throw new Error("else tag not understood");
+            }
+            i = this.tag_stack[this.tag_stack.length-1];
+            if (i != 'if' && i != 'elseif') {
+                throw new Error("else used outside of if");
+            }
+
+            this.tag_stack.pop();
+            this.tag_stack.push('else');
+            lead = this.leadingSpaces(depth-1);
+
+            parse_str = parse_str.replace(/^else\s*/, '').substr(this.options.rdelim.length);
+            compiled = lead+"}\n";
+            compiled += lead+"else {\n";
+            return [{}, compiled, parse_str];
+        }
+
+        else if (parse_str.match(/^literal/) && 
+                 parse_str.substr(7).trimLeft().indexOf(this.options.rdelim) == 0) {
+            parse_str = parse_str.replace(/^literal\s*/, '').substr(this.options.rdelim.length);
+            compiled = '';
+            while(true) {
+
+                i = parse_str.indexOf(this.options.ldelim);
+                if (i === -1)
+                    throw new Error("Closing literal tag not found");
+
+                compiled += parse_str.substr(0, i);
+                if (parse_str.substr(i+this.options.ldelim.length).trimLeft()[0] == '/' && 
+                    parse_str.substr(i+this.options.ldelim.length).trimLeft().substr(1).trimLeft().match(/^literal/) &&
+                    parse_str.substr(i+this.options.ldelim.length).trimLeft().substr(1).trimLeft().substr(7).trimLeft().indexOf(this.options.rdelim) == 0) {
+                    parse_str = parse_str.substr(i+this.options.ldelim.length).trimLeft().substr(1).trimLeft().substr(7).trimLeft().substr(this.options.rdelim.length);
+                    return [{}, lead+'text[depth] += '+this.quoteString(compiled)+";\n", parse_str.substr(this.options.ldelim.length)];
+
+                }
+                else {
+                    compiled += this.options.ldelim;
+                    parse_str = parse_str.substr(i+this.options.ldelim.length);
+                }
+            }
+        }
+
+        else if (parse_str.match(/^foreach\s/)) {
+            parse_str = parse_str.substr(7).trimLeft();
+            props = {};
+            //can't use parseProperties here. the syntax is slightly different
+            while (parse_str.indexOf(this.options.rdelim) != 0 && parse_str.length) {
+                [i, parse_str] = this.parseIdentifier(parse_str);
+                parse_str = parse_str.trimLeft();
+                if (i === false) {
+                    if (parse_str.indexOf(this.options.rdelim) !== 0)
+                        throw Error ("No closing delimiter found");
+                }
+                else {
+                    props[i] = true;
+                    if (parse_str[0] !== '=') {
+                        throw new Error ("value not specified for parameter "+i);
+                    }
+                    if (['from', 'item', 'key', 'array'].indexOf(i) === -1) {
+                        throw new Error ("foreach parameter not understood "+i);
+                    }
+                    parse_str = parse_str.substr(1).trimLeft();
+                    if (i == 'from') {
+                        //fix me: allow modifiers on this parameter
+                        [props[i], parse_str] = this.parseJSONArray(parse_str);
+                        if (props[i] === false) {
+                            [props[i], parse_str] = this.parseJSONObject(parse_str);
+                            if (props[i] === false) {
+                                [props[i], parse_str] = this.parseVariable(parse_str);
+                                if (props[i] === false) {
+                                    throw new Error("foreach from parameter not understood");
+                                }
+                            }
+                        }
+                    }
+                    else {
+                        [props[i], parse_str] = this.parseIdentifier(parse_str);
+                        if (props[i] === false)
+                            throw new Error("foreach "+i+" parameter not understood");
+                    }
+                    parse_str = parse_str.trimLeft();
+                }
+                parse_str = parse_str.trimLeft();
+            }
+            if (isUndefined(props.from))
+                throw new Error("foreach requires 'from' property to be set");
+            if (isUndefined(props.item) && isUndefined(props.key))
+                throw new Error("foreach requires either 'item' or 'key' properties to be set");
+            if (parse_str.trimLeft().indexOf(this.options.rdelim) !== 0)
+                throw new Error("foreach tag not properly closed");
+
+            if (!isUndefined(props.item)) 
+                this.internal_vars[props.item] = true;
+            if (!isUndefined(props.key))
+                this.internal_vars[props.key] = true;
+            if (!isUndefined(props.array))
+                this.internal_vars[props.array] = true;
+
+            this.tag_stack.push('foreach');
+            parse_str = parse_str.substr(this.options.rdelim.length);
+            //compiled = lead+props.from+".forEach(function(i,k,a){\n";
+
+            compiled = lead + "var o = "+props.from+";\n";
+            compiled += lead + "this.eachItem(o, function(k,v,o) {\n";
+            lead = this.leadingSpaces(depth+1);
+
+            if (props.key)
+                compiled += lead+"this.vars["+this.quoteString(props.key)+"] = k;\n";
+            if (props.item)
+                compiled += lead + "this.vars["+this.quoteString(props.item)+"] = v;\n";
+            if (props.array)
+                compiled += lead+"this.vars["+this.quoteString(props.array)+"] = o;\n";
+
+
+            [sections, returned_compiled, parse_str] = this.parseTillClosingTag(parse_str, 'foreach', depth);            
+            compiled += returned_compiled;
+
+            lead = this.leadingSpaces(depth);
+            compiled += lead+"});\n";
+            this.tag_stack.pop();
+            return [sections, compiled, parse_str];
+        }
+        else if (parse_str.match(/^foreach\s*else/) && 
+                 parse_str.replace(/^foreach\s*else/, '').trimLeft().indexOf(this.options.rdelim) == 0) {
+            parse_str = parse_str.replace(/^foreach\s*else/, '').trimLeft();
+            if (parse_str.indexOf(this.options.rdelim) != 0) {
+                throw new Error("foreach else tag not understood");
+            }
+
+            if (this.tag_stack[this.tag_stack.length-1] != 'foreach') {
+                throw new Error("can not use foreach else outside of foreach loop");
+            }
+            this.tag_stack.pop();
+            this.tag_stack.push('foreachelse');
+            lead = this.leadingSpaces(depth-1);
+
+            parse_str = parse_str.substr(this.options.rdelim.length);
+            compiled = lead+"},\n";
+            compiled += lead+"function(o) {\n";
+            return [{}, compiled, parse_str];
+        }
+        else if (parse_str.match(/^(l|r)delim/) && 
+                 parse_str.substr(6).trimLeft().indexOf(this.options.rdelim) == 0) {
+            if (parse_str[0] == 'l')
+                compiled = lead + "text[depth] += "+this.quoteString(this.options.ldelim)+"\n";
+            else
+                compiled = lead + "text[depth] += "+this.quoteString(this.options.rdelim)+"\n";
+
+            parse_str = parse_str.substr(6).trimLeft().substr(this.options.rdelim.length);
+            return [{}, compiled, parse_str];
+        }
+
+
+            
+        return [false, false, str];
+    },
+
+    parseCondition: function(str) {
+        //fix me: allow parentheses
+        //fix me: allow functions?
+        var val;
+        var compiled = '';
+        var parse_str = str;
+        [val, , parse_str] = this.parseFormula(parse_str);
+        if (val === false)
+            return [false, str];
+        compiled += val;
+        do {
+            [val, parse_str] = this.parseBooleanOperator(parse_str);
+            if (val !== false) {
+                compiled += val;
+                [val, , parse_str] = this.parseFormula(parse_str);
+                if (val === false) {
+                    throw new Error("Incomplete value formula");
+                }
+                compiled += val;
+            }
+        } while(val !== false);
+
+        return ['('+compiled+')', parse_str];
+    },
+
+    parseBooleanOperator: function(str) {
+        var parse_str = str.trimLeft();
+        var op;
+        for each(op in this.bool_operators) {
+            if (parse_str.indexOf(op) === 0) {
+                return [op, parse_str.substr(op.length)];
+            }
+        }
+        return [false, str];
+    }
+};
+
+
+
+return Template;
